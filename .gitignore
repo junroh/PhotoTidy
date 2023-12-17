@@ -1,0 +1,17 @@
+# Build output directies
+/target
+*/target
+/build
+*/build
+.out
+.dist
+.carnival
+
+# IntelliJ specific files/directories
+out
+.idea
+*.ipr
+*.iws
+*.iml
+atlassian-ide-plugin.xml
+.shelf

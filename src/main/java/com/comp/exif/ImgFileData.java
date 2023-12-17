@@ -1,10 +1,7 @@
-package Exif;
+package com.comp.exif;
 
-import com.drew.imaging.ImageProcessingException;
-
-import java.io.IOException;
 import java.nio.file.Path;
-import java.security.NoSuchAlgorithmException;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -16,11 +13,12 @@ public class ImgFileData {
     private final Path path;
     private final Date creationDate;
     private Date modifiedDate;
-    private Date imageDate;
+    private Date exifImageDate;
     private byte[] hash;
+    private String destPath;
 
     static {
-        SimpleDateFormat fileNameFormatter = new SimpleDateFormat("yyyyMMdd_HHmmss");
+        final SimpleDateFormat fileNameFormatter = new SimpleDateFormat("yyyyMMdd_HHmmss");
         fileNameFormatter.setTimeZone(TimeZone.getTimeZone("UTC"));
         try {
             noExifDate = fileNameFormatter.parse("19900101_000000");
@@ -29,35 +27,28 @@ public class ImgFileData {
         }
     }
 
-    public ImgFileData(Path path, Date modifiedDate, Date creationDate) {
+    public ImgFileData(Path path, BasicFileAttributes attrs) {
         this.path = path;
-        this.modifiedDate = modifiedDate;
-        this.creationDate = creationDate;
+        this.modifiedDate = new Date(attrs.lastModifiedTime().toMillis());
+        this.creationDate = new Date(attrs.creationTime().toMillis());
     }
 
-    public boolean parseExif() throws IOException {
-        Date imageDate = null;
-        try {
-            MetaReader metaReader = new MetaReader(path.toFile());
-            imageDate = metaReader.getOriginalDate();
-            hash = metaReader.getHash();
-        } catch (ImageProcessingException e) {
-            // do nothing
-        }
+    public void setImageData(final Date imageDate, byte[] hash) {
+        this.hash = hash;
         // set image meta date if it is valid
         if (imageDate != null && noExifDate != null && imageDate.after(noExifDate)) {
-            this.imageDate = imageDate;
-            return true;
+            exifImageDate = imageDate;
+            return;
         }
         // set file modified date with creation date if it is invalid
         if (modifiedDate.before(noExifDate)) {
             modifiedDate = creationDate;
         }
-        return false;
     }
 
-    public Date getImageDate() {
-        return imageDate;
+    // return null if there is no image date
+    public Date getExifImageDate() {
+        return exifImageDate;
     }
 
     public Path getPath() {
@@ -70,5 +61,13 @@ public class ImgFileData {
 
     public byte[] getHash() {
         return hash;
+    }
+
+    public void setDestPath(final String destPath) {
+        this.destPath = destPath;
+    }
+
+    public String getDestPath() {
+        return destPath;
     }
 }

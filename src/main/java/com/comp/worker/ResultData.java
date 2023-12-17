@@ -1,4 +1,4 @@
-package Worker;
+package com.comp.worker;
 
 public class ResultData {
     public String src;

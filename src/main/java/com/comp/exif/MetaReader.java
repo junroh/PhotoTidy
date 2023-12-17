@@ -1,4 +1,4 @@
-package Exif;
+package com.comp.exif;
 
 import com.drew.imaging.FileType;
 import com.drew.imaging.FileTypeDetector;
@@ -18,7 +18,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Date;
 
-class MetaReader {
+public class MetaReader {
     private final Metadata metadata;
     private final FileType fileType;
     private byte[] h;
