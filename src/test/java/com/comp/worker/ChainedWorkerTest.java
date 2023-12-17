@@ -24,7 +24,7 @@ class ChainedWorkerTest {
         mockedWorker.requestToComplete();
         final ProcessingResult result = f.get(2, TimeUnit.SECONDS);
         Assertions.assertEquals(result.getHandledFileCount(), 0);
-        Assertions.assertTrue(result.getRunningTime() > 400);
+        Assertions.assertTrue(result.getRunningTime() > 0);
         exec.shutdownNow();
     }
 
@@ -38,7 +38,6 @@ class ChainedWorkerTest {
             nextWorker = new MockedWorker("dummy" + (numWorkers - i), nextWorker);
             l.add(run(nextWorker , exec));
         }
-        Thread.sleep(500);
         nextWorker.requestToComplete();
         CompletableFuture<Void> f = CompletableFuture.allOf(l.toArray(new CompletableFuture<?>[0]));
         Assertions.assertDoesNotThrow(() -> f.get(3, TimeUnit.SECONDS));

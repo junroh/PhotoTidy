@@ -1,6 +1,5 @@
 package com.comp.worker;
 
-import com.comp.exif.ImgFileData;
 import com.comp.phototidy.ProcessingResult;
 import org.apache.logging.log4j.Logger;
 
@@ -11,34 +10,36 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public abstract class ChainedWorker {
 
-    private final Logger logger;
     protected final ProcessingResult processingResult;
     protected final ChainedWorker nextWorker;
 
+    private final Logger logger;
     private final AtomicBoolean finishIfNoData;
-    private final BlockingQueue<ImgFileData> q;
+    private final AtomicBoolean completed;
+    private final BlockingQueue<Object> q;
     private final String name;
 
     private Thread thread;
 
     protected ChainedWorker(final String name, final ChainedWorker nextWorker,
-                            int qSize, Logger logger) {
+                            final int qSize, final Logger logger) {
+        if(qSize<=0) {
+            throw new IllegalArgumentException("qSize should be larger than 0");
+        }
         this.name = name;
         this.logger = logger;
         this.nextWorker = nextWorker;
         this.processingResult = new ProcessingResult(name);
         this.finishIfNoData = new AtomicBoolean(false);
-        if (qSize == 0) {
-            this.q = null;
-        } else {
-            this.q = new ArrayBlockingQueue<>(qSize);
-        }
+        this.completed = new AtomicBoolean(false);
+        this.q = new ArrayBlockingQueue<>(qSize);
     }
 
     public ProcessingResult run() throws Exception {
         final long start = System.nanoTime();
         thread = Thread.currentThread();
         doRun();
+        completed.set(true);
         if (nextWorker != null) {
             nextWorker.requestToComplete();
         }
@@ -60,56 +61,52 @@ public abstract class ChainedWorker {
         return name;
     }
 
-
     protected void doRun() throws Exception {
         long processingTime = 0;
         while (true) {
-            ImgFileData imgFile;
             try {
-                imgFile = fetchNextData();
+                final Object imgFile = fetchNextData();
                 if (imgFile == null) {
                     break;
                 }
-                long start = System.currentTimeMillis();
+                final long start = System.nanoTime();
                 if (!processing(imgFile)) {
                     processingResult.incUnHandledFile();
-                    processingResult.addUnHandledFile(imgFile.getPath().toString());
                 } else {
                     processingResult.incHandledFile();
                 }
                 processingTime += TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
-                if (nextWorker != null) {
-                    nextWorker.putBlock(imgFile);
-                }
-            } catch (InterruptedException ignore) {
-                // thread.interrupt() is not required here. Interrupt flag should be consumed here
-                // If this is not an expected interruption, finish this worker
-                if(!finishIfNoData.get()) {
+                if (nextWorker != null && !nextWorker.putBlock(imgFile)) {
+                    logger.error("The next worker was completed already. Stop here!");
                     break;
                 }
-            } catch (Exception ex) {
-                logger.error("Failed to process file due to " + ex);
-                processingResult.incFailedFile();
+            } catch (final InterruptedException ignore) {
+                // thread.interrupt() is not required here. Interrupt flag should be consumed here
+                // If this is not an expected interruption, finish this worker
+                if (!finishIfNoData.get()) {
+                    break;
+                }
+            } catch (final Exception ex) {
+                logger.error("Failed to process file due to", ex);
+                break;
             }
         }
         processingResult.setProcessingTimeInMilli(processingTime);
     }
 
-    protected void putBlock(ImgFileData data) throws InterruptedException {
-        if (q == null) {
-            return;
+    protected boolean putBlock(final Object data) throws InterruptedException {
+        if (completed.get()) {
+            return false;
         }
         q.put(data);
+        return true;
     }
 
-    protected boolean processing(ImgFileData imgFileData) throws Exception {
+    protected boolean processing(final Object imgFileData) throws Exception {
         return false;
     }
 
-    private ImgFileData fetchNextData() throws InterruptedException {
-        if (q == null) {
-            return null;
-        }
+    private Object fetchNextData() throws InterruptedException {
         if (q.isEmpty() && finishIfNoData.get()) {
             return null;
         }

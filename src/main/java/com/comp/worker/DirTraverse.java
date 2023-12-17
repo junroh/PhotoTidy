@@ -1,9 +1,12 @@
 package com.comp.worker;
 
+import com.comp.exif.ImageFileInfo;
 import com.comp.exif.ImgFileData;
 import com.comp.phototidy.ProcessingResult;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.NotNullByDefault;
 
 import java.io.IOException;
 import java.nio.file.FileSystems;
@@ -16,6 +19,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.List;
 
+@NotNullByDefault
 public class DirTraverse extends ChainedWorker {
 
     private static final Logger logger = LogManager.getLogger(DirTraverse.class);
@@ -43,8 +47,8 @@ public class DirTraverse extends ChainedWorker {
         public Visitor(final List<String> exts,
                        final ChainedWorker nextChainedWorker,
                        final ProcessingResult processingResult) {
-            StringBuilder sb = new StringBuilder("glob:*.{");
-            for (String ext : exts) {
+            final StringBuilder sb = new StringBuilder("glob:*.{");
+            for (final String ext : exts) {
                 sb.append(ext);
                 sb.append(",");
             }
@@ -56,14 +60,14 @@ public class DirTraverse extends ChainedWorker {
         }
 
         @Override
-        public FileVisitResult visitFile(Path path, BasicFileAttributes attrs) {
+        public FileVisitResult visitFile(final Path path, final BasicFileAttributes attrs) {
             if (attrs.isDirectory()) {
                 return FileVisitResult.CONTINUE;
             }
             try {
                 if (matcher.matches(path.getFileName())) {
-                    final ImgFileData imgFileData = new ImgFileData(path, attrs);
-                    nextChainedWorker.putBlock(imgFileData);
+                    final ImageFileInfo imgFile = new ImageFileInfo(path, attrs);
+                    nextChainedWorker.putBlock(imgFile);
                     processingResult.incHandledFile();
                 } else {
                     processingResult.incUnHandledFile();
@@ -77,9 +81,9 @@ public class DirTraverse extends ChainedWorker {
         }
 
         @Override
-        public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
+        public FileVisitResult visitFileFailed(final Path file, final IOException exc) throws IOException {
             processingResult.incFailedFile();
-            logger.error(String.format("Failed to access %s due to %s", file.toString(), exc));
+            logger.error(String.format("Failed to access %s due to %s", file, exc));
             throw exc;
         }
     }

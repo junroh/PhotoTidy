@@ -1,8 +1,6 @@
 package com.comp.worker;
 
-import com.comp.Exceptions.DuplicateImageException;
 import com.comp.exif.ImgFileData;
-import com.comp.exif.Parser;
 import com.comp.phototidy.Options;
 import com.comp.utility.PrintOut;
 import org.apache.logging.log4j.LogManager;
@@ -12,135 +10,182 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.BasicFileAttributes;
-import java.util.Arrays;
+import java.nio.file.Paths;
 import java.util.Date;
-import java.util.LinkedList;
-import java.util.List;
+import java.util.Optional;
+import java.util.function.BiFunction;
+import java.util.function.Function;
+import java.util.function.Predicate;
 
 public class FileMover extends ChainedWorker {
 
     private static final Logger logger = LogManager.getLogger(FileMover.class);
-    private final Options opts;
+    private static final int qSize = 1024;
+    private final Locator locator;
+    private final BiFunction<Path, Path, Boolean> fileOp;
+    private final Function<String, Boolean> createDirFn;
 
-    public FileMover(Options opts) {
-        super("File mover", null, 1024, logger);
-        this.opts = opts;
+    public FileMover(final Options opts) {
+        super("File mover", null, qSize, logger);
+        this.locator = new Locator(opts);
+        this.fileOp = getFileOperator(opts);
+        this.createDirFn = getCreateDirFn(opts);
     }
 
-    protected boolean processing(final ImgFileData imgFile) throws Exception {
-        final String dstPath = imgFile.getDestPath();
-        if (dstPath != null) {
-            PrintOut.format("Move %s to %s                        \r", imgFile.getPath(), dstPath);
-            return doMove(imgFile, dstPath);
+    private Function<String, Boolean> getCreateDirFn(final Options opts) {
+        if (!opts.dryRun) {
+            return this::createDir;
         }
-        return false;
+        return (fileName) -> {
+            return true;
+        };
     }
 
-    private boolean doMove(ImgFileData src, String dst) throws IOException {
+    private BiFunction<Path, Path, Boolean> getFileOperator(final Options opts) {
+        if (!opts.dryRun) {
+            if (opts.moveFiles) {
+                return (a, b) -> {
+                    try {
+                        Files.move(a, b);
+                    } catch (Exception e) {
+                        return false;
+                    }
+                    return true;
+                };
+            }
+            return (a, b) -> {
+                try {
+                    Files.copy(a, b);
+                } catch (Exception e) {
+                    return false;
+                }
+                return true;
+            };
+        }
+        return (a, b) -> {
+            return true;
+        };
+    }
+
+    protected boolean processing(final Object imgFile) throws Exception {
+        final Optional<String> destinationPathOpt = locator.getDestinationPath(imgFile);
+        if (destinationPathOpt.isEmpty()) {
+            return false;
+        }
+        final String destinationPath = destinationPathOpt.get();
+        PrintOut.format("Move %s to %s                        \r", imgFile.getPath(), destinationPath);
+        if (!createDirFn.apply(destinationPath)) {
+            throw new IOException("Failed to create directory " + destinationPath);
+        }
+        // todo: parallelism can be added. But, it wouldn't be helpful much
+        final Path orgFile = imgFile.getPath();
+        final Path newDstFile = Paths.get(destinationPath);
+        logger.debug(() -> String.format("%s to %s", orgFile, newDstFile.toAbsolutePath()));
+        if (!fileOp.apply(orgFile, newDstFile)) {
+            logger.error(String.format("Failed to operate %s", orgFile));
+            return false;
+        }
+        return true;
+    }
+
+    private boolean createDir(final String dst) {
         final int index = dst.lastIndexOf(File.separator);
         if (index >= dst.length()) {
-            throw new IOException("Invalid destination directory " + dst);
+            logger.error("Invalid destination directory {}", dst);
+            return false;
         }
         final String dstDir = dst.substring(0, index);
-        if (!createDir(dstDir)) {
-            throw new IOException("Failed to create directory " + dstDir);
-        }
-        try {
-            final String dstFileName = dst.substring(index + 1);
-            final String newDstName = getDstFileName(src, dstDir, dstFileName);
-            // todo: parallelism can be added. But, it wouldn't be helpful much
-            moveFile(src.getPath(), newDstName);
-            return true;
-        } catch (DuplicateImageException e) {
-            // do nothing
-        }
-        return false;
-    }
-
-    private boolean createDir(String dstDir) {
-        File file = new File(dstDir);
-        if (file.exists()) {
-            if (file.isDirectory()) {
+        final Path file = Paths.get(dstDir);
+        if (Files.exists(file)) {
+            if (Files.isDirectory(file)) {
                 return true;
             }
-            logger.error("Failed to create dir " + dstDir + " due to that the same name of file exists");
+            logger.error("Failed to create dir {} due to that the same name of file exists", dstDir);
             return false;
         }
-        if (opts.dryRun) {
-            return true;
-        }
-        if (file.mkdirs()) {
-            return true;
-        }
-        logger.error("Failed to create dir " + dstDir);
-        return false;
-    }
-
-    private String getDstFileName(ImgFileData src, String dstDir, String dstName) throws IOException, DuplicateImageException {
-        int index = dstName.lastIndexOf('.');
-        String baseName = dstName.substring(0, index);
-        String baseExt = dstName.substring(index + 1);
-        int startIdx = 0;
-        while (true) {
-            String newFileName;
-            if (startIdx == 0) {
-                newFileName = dstDir + File.separator + dstName;
-            } else {
-                newFileName = String.format("%s%s_%03d.%s", dstDir + File.separator, baseName, startIdx, baseExt);
-            }
-            logger.debug("New name is " + newFileName);
-            final File existFile = new File(newFileName);
-            if (!existFile.exists()) {
-                return newFileName;
-            }
-            // same original date and same size
-            if (isDuplicate(existFile, src)) {
-                throw new DuplicateImageException(
-                        String.format("%s is duplicated by the name of %s",
-                                      src.getPath().toString(), newFileName));
-            }
-            startIdx++;
-        }
-    }
-
-    private boolean isDuplicate(File dstFile, ImgFileData srcImage) throws IOException {
-        final BasicFileAttributes attr = Files.readAttributes(dstFile.toPath(), BasicFileAttributes.class);
-        final ImgFileData tgtImage = new ImgFileData(dstFile.toPath(), attr);
-        if (Parser.parseExif(tgtImage)) {
-            if (srcImage.getExifImageDate() != null &&
-                    tgtImage.getExifImageDate().compareTo(srcImage.getExifImageDate()) == 0) {
-                return true;
-            }
-        }
-        if (tgtImage.getFileModifiedDate().compareTo(srcImage.getFileModifiedDate()) != 0) {
-            return false;
-        }
-        final long srcSize = srcImage.getPath().toFile().length();
-        final long dstSize = dstFile.length();
-        if (srcSize != dstSize) {
-            return false;
-        }
-        return Arrays.equals(tgtImage.getHash(), srcImage.getHash());
-    }
-
-    private void moveFile(Path orgFile, String newName) {
-        File newDstFile = new File(newName);
-        logger.debug(String.format("%s to %s", orgFile, newDstFile.getAbsolutePath()));
         try {
-            if (!opts.dryRun) {
-                if (opts.moveFiles) {
-                    Files.move(orgFile, newDstFile.toPath());
-                } else {
-                    Files.copy(orgFile, newDstFile.toPath());
+            Files.createDirectory(file);
+            return true;
+        } catch (final Exception e) {
+            logger.error("Failed to create dir {} due to {}", dstDir, e);
+            return false;
+        }
+    }
+
+    static class Locator {
+        private final Options opts;
+        private final Predicate<String> fileExistingFn;
+
+        Locator(final Options opts) {
+            this(opts, fileName -> new File(fileName).exists());
+        }
+
+        Locator(final Options opts, final Predicate<String> fileExistingFn) {
+            this.opts = opts;
+            this.fileExistingFn = fileExistingFn;
+        }
+
+        Optional<String> getDestinationPath(final ImgFileData imgFile) {
+            final String originalFileName = imgFile.getPath().getFileName().toString();
+            final int dotPos = originalFileName.lastIndexOf('.');
+            if (dotPos < 0) {
+                throw new RuntimeException("Invalid file name was found " + originalFileName);
+            }
+            final String fileExt = originalFileName.substring(dotPos + 1);
+
+            final Optional<Date> imageDateOpt = imgFile.getExifImageDate();
+            Date imageDate;
+            if (imageDateOpt.isEmpty()) {
+                logger.debug(() -> String.format("No exif in file found %s", originalFileName));
+                switch (opts.noExifDir) {
+                    case MODIFIED_DATE -> imageDate = imgFile.getFileModifiedDate();
+                    case FIXED_DIR -> {
+                        return Optional.of(opts.dstBaseDir + File.separator + opts.noExifDirName +
+                                File.separator + originalFileName);
+                    }
+                    case SKIP -> {
+                        return Optional.empty();
+                    }
+                    case STOP -> throw new RuntimeException("no-Exif file was found. STOP! " + originalFileName);
+                    default -> throw new IllegalArgumentException("unknown configuration for no-exif file "
+                            + opts.noExifDir);
                 }
+            } else {
+                imageDate = imageDateOpt.get();
             }
-            doneList.add(new ResultData(orgFile.toString(), newName));
-            processingResult.incHandledFile();
-        } catch (IOException e) {
-            logger.error(String.format("Failed to move %s due to %s", orgFile, e));
-            failedList.add(new ResultData(orgFile.toString(), newName));
-            processingResult.incUnHandledFile();
+            return handleDuplication(
+                    opts.dstBaseDir + (File.separator + opts.dirNameFormatter.format(imageDate)),
+                    opts.fileNameFormatter.format(imageDate),
+                    fileExt);
+        }
+
+        // It is possible that there is the same name in the target
+        // You have to decide whether you need to make a progress or not
+        private Optional<String> handleDuplication(final String targetDirectory, final String targetName,
+                                                   final String ext) {
+            switch (opts.duplicateOpt) {
+                case INCREASE -> {
+                    return Optional.of(getFileNameWithIncreasedIndex(targetDirectory, targetName, ext));
+                }
+                case SKIP -> {
+                    return Optional.empty();
+                }
+                case STOP -> throw new RuntimeException("Stop processing due to a duplicated file");
+            }
+            throw new IllegalArgumentException("Unknown configuration for a duplication " + opts.duplicateOpt);
+        }
+
+        private String getFileNameWithIncreasedIndex(final String targetDirectory, final String targetName,
+                                                     final String ext) {
+            final String defaultFileName = targetDirectory + File.separator + targetName;
+            String newFileName = String.format("%s.%s", defaultFileName, ext);
+            int index = 0;
+            do {
+                if (!fileExistingFn.test(newFileName)) {
+                    return newFileName;
+                }
+                newFileName = String.format("%s_%03d.%s", defaultFileName, ++index, ext);
+            } while (true);
         }
     }
 }
