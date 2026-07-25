@@ -1,0 +1,26 @@
+# Build output directies
+/target
+*/target
+/build
+*/build
+.out
+.dist
+.carnival
+
+# Maven shade plugin byproduct
+dependency-reduced-pom.xml
+
+# PhotoTidy hash cache
+.phototidy-cache.tsv
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# IntelliJ specific files/directories
+out
+.idea
+*.ipr
+*.iws
+*.iml
+atlassian-ide-plugin.xml
+.shelf
